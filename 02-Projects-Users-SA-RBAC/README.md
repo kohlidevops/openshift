@@ -1468,33 +1468,6 @@ oc auth can-i get pods --as=system:serviceaccount:<project>:<serviceaccount>
 
 Giving a user, group or application only the minimum permissions required to perform its job.
 
----
-
-# 📁 Files Created During This Lesson
-
-```text
-lesson-02-projects-users-rbac/
-│
-├── README.md
-└── pod-reader-role.yaml
-```
-
-The `pod-reader-role.yaml` contains:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: pod-reader
-rules:
-  - apiGroups: [""]
-    resources:
-      - pods
-    verbs:
-      - get
-      - list
-      - watch
-```
 
 ---
 
