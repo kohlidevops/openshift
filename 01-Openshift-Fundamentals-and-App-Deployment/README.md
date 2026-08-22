@@ -475,7 +475,6 @@ Provides a logical workspace/isolation boundary for applications and resources.
 
 # 16. Kubernetes Knowledge vs OpenShift Knowledge
 
-Because I already have Kubernetes knowledge, I can relate the concepts like this:
 
 ```text
 Kubernetes                 OpenShift
@@ -488,33 +487,10 @@ Build               --->   BuildConfig / S2I
 Kubernetes security --->   RBAC + SCC
 ```
 
-OpenShift is therefore not completely new to me. My existing Kubernetes knowledge provides the foundation, while I need to learn the OpenShift-specific platform capabilities.
-
 ---
 
-# 17. Hands-on Completed
 
-### ✅ Completed Tasks
-
-* [x] Created OpenShift Developer Sandbox
-* [x] Accessed OpenShift Web Console
-* [x] Accessed OpenShift project
-* [x] Installed/configured OpenShift CLI
-* [x] Logged in using `oc`
-* [x] Checked current project
-* [x] Used `oc status`
-* [x] Deployed ParksMap application
-* [x] Verified application Pod
-* [x] Verified Deployment
-* [x] Verified Service
-* [x] Created OpenShift Route
-* [x] Accessed application from browser
-* [x] Explored application using OpenShift Console
-* [x] Practiced basic troubleshooting commands
-
----
-
-# 18. What I Learned
+# 17. What I Learned
 
 The most important concept from Lesson 1 is:
 
@@ -547,57 +523,7 @@ A simple way to remember it:
 
 ---
 
-# 19. Next Lesson
 
-## Lesson 2 – Projects, Users and Namespaces
-
-Topics:
-
-* OpenShift Projects
-* Kubernetes Namespaces
-* Users
-* Groups
-* ServiceAccounts
-* Authentication
-* Authorization
-* Project isolation
-* `oc project`
-* `oc new-project`
-* User permissions
-
-Hands-on:
-
-```text
-Create Project
-      ↓
-Create resources
-      ↓
-Create ServiceAccount
-      ↓
-Assign permissions
-      ↓
-Test access
-```
-
----
-
-```
-
-**Status: Lesson 1 Completed ✅**
-
----
-
-## Environment
-
-```text
-Platform: Red Hat OpenShift Developer Sandbox
-OpenShift Version: 4.22.x
-Client: OpenShift CLI (`oc`)
-Application: ParksMap
-Project: lakshminarayananredh-dev
-```
-
----
 
 ## Useful References
 
