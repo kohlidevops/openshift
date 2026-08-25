@@ -1,0 +1,1313 @@
+# OpenShift Learning – Lesson 18: Deployment Strategies
+
+## 🚀 Lesson 18: RollingUpdate, Recreate, Blue/Green & Canary
+
+> **Environment Note:** I am using an OpenShift Developer Sandbox with restricted permissions and Windows Command Prompt (CMD). During this lesson, the standard `nginx:1.25` image caused `CrashLoopBackOff` because OpenShift runs containers with restricted/non-root permissions. Therefore, both RollingUpdate and Recreate practices below use an OpenShift-compatible nginx configuration with a ConfigMap, port `8080`, and writable `/tmp` directories.
+
+---
+
+## 🎯 Learning Objectives
+
+By the end of this lesson, I should understand:
+
+- What a Deployment strategy is
+- RollingUpdate strategy
+- Recreate strategy
+- How OpenShift updates Pods
+- How to observe a rollout
+- How to update an application image
+- How to check rollout status
+- How to view rollout history
+- How to rollback
+- Difference between RollingUpdate and Recreate
+- Blue/Green deployment concept
+- Canary deployment concept
+- Basic deployment troubleshooting
+- How to troubleshoot `CrashLoopBackOff`
+- Why standard nginx configuration can fail under OpenShift restricted/non-root execution
+
+---
+
+# 1. What Is a Deployment Strategy?
+
+A Deployment controls application Pods.
+
+```text
+Deployment
+    ↓
+ReplicaSet
+    ↓
+Pods
+```
+
+When an application version changes, OpenShift needs to decide:
+
+> How should the old Pods be replaced?
+
+This behavior is controlled by the **Deployment strategy**.
+
+The two strategies we will practice:
+
+```text
+RollingUpdate
+Recreate
+```
+
+---
+
+# 2. RollingUpdate
+
+RollingUpdate replaces old Pods gradually with new Pods.
+
+Conceptually:
+
+```text
+Old Version
+    Pod A
+    Pod B
+    Pod C
+       ↓
+New Version
+    Pod A
+    Pod B
+    Pod C
+```
+
+During the rollout, old and new versions can temporarily exist together.
+
+```text
+v1 → Pod A
+v1 → Pod B
+v2 → Pod D
+
+       ↓
+
+v1 → Pod B
+v2 → Pod D
+v2 → Pod E
+
+       ↓
+
+v2 → Pod D
+v2 → Pod E
+v2 → Pod F
+```
+
+This normally provides minimal application disruption.
+
+---
+
+# 3. OpenShift and nginx Permission Issue
+
+During this lesson, using:
+
+```text
+nginx:1.25
+```
+
+with the default nginx configuration caused:
+
+```text
+CrashLoopBackOff
+```
+
+The important error was:
+
+```text
+mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)
+```
+
+We also saw:
+
+```text
+sed: couldn't open temporary file /etc/nginx/... Permission denied
+```
+
+### Root Cause
+
+OpenShift runs containers under restricted/non-root security settings.
+
+The standard nginx configuration expects to write to locations such as:
+
+```text
+/var/cache/nginx
+/etc/nginx
+```
+
+which are not writable by the restricted runtime user.
+
+Therefore, for this lesson we use:
+
+```text
+ConfigMap
+    ↓
+Custom nginx.conf
+    ↓
+Listen on 8080
+    ↓
+Temporary files → /tmp
+    ↓
+Logs → stdout/stderr
+```
+
+This allows us to focus on the Deployment strategies instead of repeatedly troubleshooting nginx permissions.
+
+---
+
+# 4. RollingUpdate – OpenShift-Compatible YAML
+
+Create:
+
+```text
+lesson18-rolling.yaml
+```
+
+Use:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lesson18-rolling-nginx-config
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      access_log /dev/stdout;
+      error_log /dev/stderr;
+
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      fastcgi_temp_path /tmp/fastcgi_temp;
+      uwsgi_temp_path /tmp/uwsgi_temp;
+      scgi_temp_path /tmp/scgi_temp;
+
+      server {
+        listen 8080;
+        server_name _;
+
+        location / {
+          root /usr/share/nginx/html;
+          index index.html;
+        }
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lesson18-rolling
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: lesson18-rolling
+  template:
+    metadata:
+      labels:
+        app: lesson18-rolling
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.25
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: lesson18-rolling-nginx-config
+        - name: nginx-tmp
+          emptyDir: {}
+```
+
+---
+
+# 5. Deploy RollingUpdate Application
+
+Apply:
+
+```cmd
+oc apply -f lesson18-rolling.yaml
+```
+
+Check:
+
+```cmd
+oc get deployment
+```
+
+Check Pods:
+
+```cmd
+oc get pods
+```
+
+Expected:
+
+```text
+lesson18-rolling-xxxxx   1/1   Running
+lesson18-rolling-xxxxx   1/1   Running
+lesson18-rolling-xxxxx   1/1   Running
+```
+
+---
+
+# 6. Check RollingUpdate Strategy
+
+Run:
+
+```cmd
+oc get deployment lesson18-rolling -o yaml
+```
+
+Look for:
+
+```yaml
+strategy:
+  type: RollingUpdate
+```
+
+Or:
+
+```cmd
+oc describe deployment lesson18-rolling
+```
+
+Look for:
+
+```text
+Strategy: RollingUpdate
+```
+
+---
+
+# 7. Check Application Logs
+
+Get a Pod:
+
+```cmd
+oc get pods
+```
+
+Then:
+
+```cmd
+oc logs <pod-name>
+```
+
+The nginx container should be running without the previous permission error.
+
+---
+
+# 8. Check Rollout Status
+
+Run:
+
+```cmd
+oc rollout status deployment/lesson18-rolling
+```
+
+Expected:
+
+```text
+deployment "lesson18-rolling" successfully rolled out
+```
+
+---
+
+# 9. Update RollingUpdate Application
+
+Change the nginx image:
+
+```cmd
+oc set image deployment/lesson18-rolling web=nginx:1.27
+```
+
+Check Pods:
+
+```cmd
+oc get pods
+```
+
+You should observe old and new Pods during the rollout.
+
+Watch continuously:
+
+```cmd
+oc get pods -w
+```
+
+Stop watching:
+
+```text
+Ctrl + C
+```
+
+---
+
+# 10. Understand the RollingUpdate
+
+With 3 replicas, conceptually:
+
+```text
+Before:
+
+v1 → Pod A
+v1 → Pod B
+v1 → Pod C
+```
+
+During rollout:
+
+```text
+v1 → Pod A
+v1 → Pod B
+v2 → Pod D
+```
+
+Then:
+
+```text
+v1 → Pod A
+v2 → Pod D
+v2 → Pod E
+```
+
+Finally:
+
+```text
+v2 → Pod D
+v2 → Pod E
+v2 → Pod F
+```
+
+The old version is gradually replaced.
+
+---
+
+# 11. Check Rollout History
+
+Run:
+
+```cmd
+oc rollout history deployment/lesson18-rolling
+```
+
+You should see deployment revisions.
+
+Example:
+
+```text
+REVISION
+1
+2
+```
+
+---
+
+# 12. Check a Specific Revision
+
+Run:
+
+```cmd
+oc rollout history deployment/lesson18-rolling --revision=2
+```
+
+This can show information about a specific deployment revision.
+
+---
+
+# 13. Rollback RollingUpdate
+
+Suppose the new version has a problem.
+
+Run:
+
+```cmd
+oc rollout undo deployment/lesson18-rolling
+```
+
+Check:
+
+```cmd
+oc rollout status deployment/lesson18-rolling
+```
+
+Then:
+
+```cmd
+oc get pods
+```
+
+The Deployment should return to the previous revision.
+
+---
+
+# 14. Recreate Strategy
+
+The second strategy is:
+
+```text
+Recreate
+```
+
+Recreate works differently from RollingUpdate.
+
+Conceptually:
+
+```text
+Old Pods
+    ↓
+Deleted
+    ↓
+No application Pods
+    ↓
+New Pods created
+```
+
+Example:
+
+```text
+v1 → Pod A
+v1 → Pod B
+v1 → Pod C
+
+       ↓
+
+DELETE
+
+       ↓
+
+No Pods
+
+       ↓
+
+v2 → Pod A
+v2 → Pod B
+v2 → Pod C
+```
+
+This can cause application downtime.
+
+---
+
+# 15. Recreate – OpenShift-Compatible YAML
+
+Create:
+
+```text
+lesson18-recreate.yaml
+```
+
+Use:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lesson18-recreate-nginx-config
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      access_log /dev/stdout;
+      error_log /dev/stderr;
+
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      fastcgi_temp_path /tmp/fastcgi_temp;
+      uwsgi_temp_path /tmp/uwsgi_temp;
+      scgi_temp_path /tmp/scgi_temp;
+
+      server {
+        listen 8080;
+        server_name _;
+
+        location / {
+          root /usr/share/nginx/html;
+          index index.html;
+        }
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lesson18-recreate
+spec:
+  replicas: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: lesson18-recreate
+  template:
+    metadata:
+      labels:
+        app: lesson18-recreate
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.25
+          command:
+            - nginx
+            - -c
+            - /etc/nginx/nginx.conf
+            - -g
+            - daemon off;
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: lesson18-recreate-nginx-config
+        - name: nginx-tmp
+          emptyDir: {}
+```
+
+---
+
+# 16. Deploy Recreate Application
+
+Apply:
+
+```cmd
+oc apply -f lesson18-recreate.yaml
+```
+
+Check:
+
+```cmd
+oc get deployment
+```
+
+Check Pods:
+
+```cmd
+oc get pods
+```
+
+Expected:
+
+```text
+lesson18-recreate-xxxxx   1/1   Running
+lesson18-recreate-xxxxx   1/1   Running
+lesson18-recreate-xxxxx   1/1   Running
+```
+
+---
+
+# 17. Verify Recreate Strategy
+
+Run:
+
+```cmd
+oc get deployment lesson18-recreate -o yaml
+```
+
+Look for:
+
+```yaml
+strategy:
+  type: Recreate
+```
+
+Or:
+
+```cmd
+oc describe deployment lesson18-recreate
+```
+
+Look for:
+
+```text
+Strategy: Recreate
+```
+
+---
+
+# 18. Practice Recreate
+
+Change the image:
+
+```cmd
+oc set image deployment/lesson18-recreate web=nginx:1.27
+```
+
+Immediately run:
+
+```cmd
+oc get pods -w
+```
+
+Observe the behavior.
+
+Expected concept:
+
+```text
+Old Pods
+    ↓
+All old Pods terminated
+    ↓
+Temporary period with no application Pods
+    ↓
+New Pods created
+    ↓
+New Pods Running
+```
+
+Stop watching:
+
+```text
+Ctrl + C
+```
+
+---
+
+# 19. RollingUpdate vs Recreate
+
+| Strategy | Behavior | Downtime |
+|---|---|---|
+| RollingUpdate | Gradually replaces Pods | Usually minimal/no downtime |
+| Recreate | Deletes old Pods before creating new Pods | Possible downtime |
+
+Easy memory:
+
+```text
+RollingUpdate
+
+Old → New gradually
+```
+
+```text
+Recreate
+
+Old → Delete → New
+```
+
+---
+
+# 20. Why Use Recreate?
+
+Recreate can be useful when:
+
+- Old and new versions cannot run simultaneously
+- The application requires a clean restart
+- Old and new versions conflict with shared resources
+- Temporary downtime is acceptable
+
+For most normal web applications:
+
+```text
+RollingUpdate
+```
+
+is generally preferred.
+
+---
+
+# 21. Blue/Green Deployment
+
+Blue/Green keeps two application versions.
+
+```text
+Blue
+ ↓
+Version 1
+
+Green
+ ↓
+Version 2
+```
+
+Example:
+
+```text
+             Service
+                |
+                v
+             Blue v1
+```
+
+Deploy v2 separately:
+
+```text
+             Service
+                |
+                v
+             Blue v1
+
+             Green v2
+```
+
+After testing Green, traffic can be switched:
+
+```text
+             Service
+                |
+                v
+             Green v2
+```
+
+### Remember
+
+```text
+Blue = Old Version
+
+Green = New Version
+```
+
+For now, learn Blue/Green as a concept. We can build a complete implementation later.
+
+---
+
+# 22. Canary Deployment
+
+Canary sends only a small amount of traffic to the new version.
+
+Example:
+
+```text
+Users
+  |
+  +---- 90% → v1
+  |
+  +---- 10% → v2
+```
+
+If v2 works:
+
+```text
+50% → v1
+50% → v2
+```
+
+Eventually:
+
+```text
+100% → v2
+```
+
+The purpose is to reduce deployment risk.
+
+---
+
+# 23. Deployment Strategy Comparison
+
+```text
+RollingUpdate
+    ↓
+Gradually replace Pods
+```
+
+```text
+Recreate
+    ↓
+Delete old Pods
+    ↓
+Create new Pods
+```
+
+```text
+Blue/Green
+    ↓
+Run two versions
+    ↓
+Switch traffic
+```
+
+```text
+Canary
+    ↓
+Small percentage of traffic
+    ↓
+Test new version
+    ↓
+Gradually increase traffic
+```
+
+---
+
+# 24. Deployment Troubleshooting
+
+If a rollout gets stuck:
+
+```cmd
+oc get deployment
+```
+
+Then:
+
+```cmd
+oc get pods
+```
+
+Then:
+
+```cmd
+oc describe deployment <deployment-name>
+```
+
+Then:
+
+```cmd
+oc describe pod <pod-name>
+```
+
+Then:
+
+```cmd
+oc logs <pod-name>
+```
+
+Finally:
+
+```cmd
+oc get events --sort-by=.lastTimestamp
+```
+
+Troubleshooting flow:
+
+```text
+Rollout Problem
+      ↓
+Deployment Status
+      ↓
+Pod Status
+      ↓
+Pod Events
+      ↓
+Application Logs
+      ↓
+Root Cause
+```
+
+---
+
+# 25. Practice a Failed RollingUpdate
+
+We will intentionally use an invalid image.
+
+Run:
+
+```cmd
+oc set image deployment/lesson18-rolling web=nginx:this-image-does-not-exist
+```
+
+Check:
+
+```cmd
+oc rollout status deployment/lesson18-rolling
+```
+
+Check:
+
+```cmd
+oc get pods
+```
+
+You may see:
+
+```text
+ImagePullBackOff
+```
+
+or:
+
+```text
+ErrImagePull
+```
+
+---
+
+# 26. Troubleshoot the Failed Rollout
+
+First:
+
+```cmd
+oc get pods
+```
+
+Find the failing Pod.
+
+Then:
+
+```cmd
+oc describe pod <pod-name>
+```
+
+Look at the Events section.
+
+Then:
+
+```cmd
+oc get events --sort-by=.lastTimestamp
+```
+
+You should find information about the image pull failure.
+
+---
+
+# 27. Roll Back the Failed RollingUpdate
+
+Run:
+
+```cmd
+oc rollout undo deployment/lesson18-rolling
+```
+
+Check:
+
+```cmd
+oc rollout status deployment/lesson18-rolling
+```
+
+Then:
+
+```cmd
+oc get pods
+```
+
+The application should return to the previous working version.
+
+---
+
+# 28. Important Lesson Learned From nginx
+
+During this lesson, we initially used:
+
+```text
+nginx:1.25
+```
+
+with the default configuration.
+
+It failed because:
+
+```text
+/var/cache/nginx
+```
+
+was not writable under the OpenShift restricted/non-root runtime.
+
+The error was:
+
+```text
+mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)
+```
+
+We also attempted to modify:
+
+```text
+/etc/nginx/nginx.conf
+```
+
+at runtime and received:
+
+```text
+Permission denied
+```
+
+### Correct approach
+
+Instead of modifying protected files at startup:
+
+```text
+❌ sed /etc/nginx/nginx.conf
+❌ write /var/cache/nginx
+```
+
+we use:
+
+```text
+ConfigMap
+    ↓
+Custom nginx.conf
+    ↓
+Port 8080
+    ↓
+/tmp for temporary files
+    ↓
+stdout/stderr for logs
+```
+
+This is a useful OpenShift security lesson.
+
+---
+
+# 29. Final Troubleshooting Scenario
+
+Imagine you see:
+
+```text
+STATUS
+CrashLoopBackOff
+```
+
+Start with:
+
+```cmd
+oc get pods
+```
+
+Then:
+
+```cmd
+oc logs <pod-name>
+```
+
+If necessary:
+
+```cmd
+oc logs <pod-name> --previous
+```
+
+Then:
+
+```cmd
+oc describe pod <pod-name>
+```
+
+Then:
+
+```cmd
+oc get events --sort-by=.lastTimestamp
+```
+
+The important mindset is:
+
+```text
+Don't immediately change the Deployment.
+
+First:
+Check Events
+Check Logs
+Find Root Cause
+Then Fix
+```
+
+---
+
+
+# 🧠 Final Memory Trick
+
+```text
+RollingUpdate
+
+Old Pods
+   ↓
+New Pods gradually
+   ↓
+Minimal disruption
+```
+
+```text
+Recreate
+
+Old Pods
+   ↓
+Delete all
+   ↓
+No Pods temporarily
+   ↓
+Create new Pods
+```
+
+```text
+Blue/Green
+
+Blue = Old
+Green = New
+   ↓
+Switch traffic
+```
+
+```text
+Canary
+
+Mostly Old
+   +
+Small New
+   ↓
+Test
+   ↓
+Increase New
+```
+
+---
+
+# 🔧 Important Commands
+
+## Deployment
+
+```cmd
+oc get deployment
+```
+
+```cmd
+oc describe deployment <deployment-name>
+```
+
+## Pods
+
+```cmd
+oc get pods
+```
+
+```cmd
+oc get pods -w
+```
+
+```cmd
+oc describe pod <pod-name>
+```
+
+## Logs
+
+```cmd
+oc logs <pod-name>
+```
+
+```cmd
+oc logs <pod-name> --previous
+```
+
+## Update Image
+
+```cmd
+oc set image deployment/<deployment-name> <container-name>=<image>
+```
+
+## Rollout
+
+```cmd
+oc rollout status deployment/<deployment-name>
+```
+
+```cmd
+oc rollout history deployment/<deployment-name>
+```
+
+```cmd
+oc rollout history deployment/<deployment-name> --revision=2
+```
+
+```cmd
+oc rollout undo deployment/<deployment-name>
+```
+
+## Events
+
+```cmd
+oc get events --sort-by=.lastTimestamp
+```
+
+---
+
+# ✅ Lesson 18 Completion Checklist
+
+- [ ] Understand Deployment strategies
+- [ ] Understand RollingUpdate
+- [ ] Create a RollingUpdate Deployment
+- [ ] Understand OpenShift-compatible nginx configuration
+- [ ] Understand why standard nginx failed under restricted/non-root execution
+- [ ] Update an application image
+- [ ] Watch a RollingUpdate
+- [ ] Use `oc rollout status`
+- [ ] Use `oc rollout history`
+- [ ] Understand deployment revisions
+- [ ] Perform a rollback
+- [ ] Understand Recreate
+- [ ] Create a Recreate Deployment
+- [ ] Update a Recreate Deployment
+- [ ] Observe old Pods being removed
+- [ ] Observe new Pods being created
+- [ ] Understand RollingUpdate vs Recreate
+- [ ] Understand Blue/Green concept
+- [ ] Understand Canary concept
+- [ ] Troubleshoot a failed rollout
+- [ ] Troubleshoot `ImagePullBackOff`
+- [ ] Troubleshoot `CrashLoopBackOff`
+- [ ] Use Events for deployment troubleshooting
+- [ ] Use application logs for deployment troubleshooting
+- [ ] Roll back a failed deployment
+
+---
+
+# 🏁 Lesson 18 Goal
+
+
+> **A Deployment strategy controls how OpenShift replaces an old application version with a new version. RollingUpdate gradually replaces Pods, while Recreate removes the old Pods before creating the new Pods. Blue/Green and Canary are deployment patterns used to reduce deployment risk.**
+
+The core model:
+
+```text
+Deployment
+     |
+     v
+Deployment Strategy
+     |
+     +---- RollingUpdate
+     |
+     +---- Recreate
+     |
+     +---- Blue/Green
+     |
+     +---- Canary
+```
+
+### OpenShift troubleshooting mindset
+
+```text
+Deployment
+    ↓
+Pods
+    ↓
+Events
+    ↓
+Logs
+    ↓
+Root Cause
+    ↓
+Fix
+    ↓
+Rollout
+    ↓
+Verify
+```
+
+**Lesson 18 Topic: OpenShift Deployment Strategies – RollingUpdate, Recreate, Blue/Green, Canary & Deployment Troubleshooting**
